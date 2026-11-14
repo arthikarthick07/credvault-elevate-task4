@@ -1,0 +1,166 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import initSqlJs from 'sql.js';
+import bcrypt from 'bcryptjs';
+import { config, ensureRuntimeDirs } from './config';
+
+/** Values accepted by sql.js bindings. */
+export type SqlValue = string | number | null;
+
+interface SqlStatement {
+  bind(params: SqlValue[]): void;
+  step(): boolean;
+  getAsObject(): Record<string, SqlValue>;
+  free(): void;
+}
+
+interface SqlDatabase {
+  run(sql: string, params?: SqlValue[]): void;
+  exec(sql: string): unknown;
+  prepare(sql: string): SqlStatement;
+  export(): Uint8Array;
+  close(): void;
+}
+
+interface SqlJsFactory {
+  Database: new (data?: Uint8Array) => SqlDatabase;
+}
+
+let db: SqlDatabase | undefined;
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS admins (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  email         TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  name          TEXT NOT NULL,
+  created_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS applications (
+  application_id TEXT PRIMARY KEY,
+  full_name      TEXT NOT NULL,
+  phone          TEXT NOT NULL,
+  gender         TEXT NOT NULL,
+  city           TEXT NOT NULL,
+  state          TEXT NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'pending'
+                 CHECK (status IN ('pending', 'approved', 'rejected')),
+  remarks        TEXT,
+  reviewed_by    TEXT,
+  reviewed_at    TEXT,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS certificates (
+  certificate_id   TEXT PRIMARY KEY,
+  application_id   TEXT NOT NULL UNIQUE,
+  full_name        TEXT NOT NULL,
+  phone            TEXT NOT NULL,
+  gender           TEXT NOT NULL,
+  city             TEXT NOT NULL,
+  state            TEXT NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'valid'
+                   CHECK (status IN ('valid', 'revoked')),
+  issued_by        TEXT NOT NULL,
+  issued_at        TEXT NOT NULL,
+  revoked_at       TEXT,
+  revocation_reason TEXT,
+  FOREIGN KEY (application_id) REFERENCES applications (application_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_applications_status ON applications (status);
+CREATE INDEX IF NOT EXISTS idx_applications_created ON applications (created_at);
+CREATE INDEX IF NOT EXISTS idx_certificates_status ON certificates (status);
+`;
+
+function resolveWasmDir(): string {
+  const candidates = [
+    path.join(process.cwd(), 'node_modules', 'sql.js', 'dist'),
+    path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist'),
+    path.join(__dirname, 'node_modules', 'sql.js', 'dist'),
+  ];
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, 'sql-wasm.wasm'))) return dir;
+  }
+  throw new Error(
+    'Unable to locate the sql.js WebAssembly assets. Run "npm install" in the repository root.',
+  );
+}
+
+function requireDb(): SqlDatabase {
+  if (!db) throw new Error('Database has not been initialised. Call initDatabase() first.');
+  return db;
+}
+
+/** Writes the in-memory SQLite image to disk atomically. */
+export function persist(): void {
+  if (!db) return;
+  const data = Buffer.from(db.export());
+  const tmpPath = `${config.dbPath}.tmp`;
+  fs.writeFileSync(tmpPath, data);
+  fs.renameSync(tmpPath, config.dbPath);
+}
+
+export function all<T>(sql: string, params: SqlValue[] = []): T[] {
+  const statement = requireDb().prepare(sql);
+  try {
+    statement.bind(params);
+    const rows: T[] = [];
+    while (statement.step()) {
+      rows.push(statement.getAsObject() as unknown as T);
+    }
+    return rows;
+  } finally {
+    statement.free();
+  }
+}
+
+export function get<T>(sql: string, params: SqlValue[] = []): T | undefined {
+  return all<T>(sql, params)[0];
+}
+
+export function run(sql: string, params: SqlValue[] = []): void {
+  requireDb().run(sql, params);
+  persist();
+}
+
+function seedAdmin(): void {
+  const existing = get<{ count: number }>('SELECT COUNT(*) AS count FROM admins');
+  if (existing && Number(existing.count) > 0) return;
+
+  const passwordHash = bcrypt.hashSync(config.admin.password, config.bcryptRounds);
+  requireDb().run(
+    'INSERT INTO admins (email, password_hash, name, created_at) VALUES (?, ?, ?, ?)',
+    [config.admin.email, passwordHash, config.admin.name, new Date().toISOString()],
+  );
+  // eslint-disable-next-line no-console
+  console.log(`[credvault] Seeded administrator account: ${config.admin.email}`);
+}
+
+export async function initDatabase(): Promise<void> {
+  ensureRuntimeDirs();
+  const factory = (await (initSqlJs as unknown as (cfg?: unknown) => Promise<SqlJsFactory>)({
+    locateFile: (file: string) => path.join(resolveWasmDir(), file),
+  })) as SqlJsFactory;
+
+  if (fs.existsSync(config.dbPath)) {
+    db = new factory.Database(new Uint8Array(fs.readFileSync(config.dbPath)));
+  } else {
+    db = new factory.Database();
+  }
+
+  requireDb().exec(SCHEMA);
+  seedAdmin();
+  persist();
+  // eslint-disable-next-line no-console
+  console.log(`[credvault] SQLite database ready at ${config.dbPath}`);
+}
+
+export function closeDatabase(): void {
+  if (!db) return;
+  persist();
+  db.close();
+  db = undefined;
+}
