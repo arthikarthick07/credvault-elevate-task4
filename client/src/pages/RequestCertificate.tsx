@@ -146,11 +146,9 @@ export function RequestCertificate() {
     return (
       <div className="mx-auto max-w-2xl space-y-5">
         <Card className="overflow-hidden">
-          <div className="border-b border-emerald-200 bg-emerald-50 px-6 py-5">
-            <p className="text-xs font-bold tracking-[0.16em] text-emerald-800 uppercase">
-              Application submitted
-            </p>
-            <h1 className="mt-1 text-xl font-bold text-emerald-900">Your application is pending review</h1>
+          <div role="status" aria-live="polite" className="border-b border-emerald-200 bg-emerald-50 px-6 py-5">
+            <h1 className="text-xl font-bold text-emerald-900">Application submitted</h1>
+            <p className="mt-1 text-sm font-semibold text-emerald-800">Your application is pending review</p>
             <p className="mt-1 text-sm text-emerald-800">
               Keep this application ID safe. You need it to track the status of your certificate request.
             </p>
