@@ -1,0 +1,23 @@
+{
+  "name": "credvault",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CredVault – Certificate Issuing & Verification Platform (React + Express + SQLite)",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "prebuild": "npm --prefix client install --no-audit --no-fund --no-progress",
+    "build": "npm run build:client && npm run build:server",
+    "build:client": "npm --prefix client run build",
+    "build:server": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:client": "npm --prefix client run dev",
+    "typecheck": "tsc -p tsconfig.json --noEmit && npm --prefix client run typecheck",
+    "test": "npm run build && node scripts/smoke-test.js"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
