@@ -142,11 +142,12 @@ All variables are optional for local development; the defaults below keep the ap
 | ---------------- | ------------------------ | ---------------------------------------------------------- |
 | `PORT`           | `4000`                   | Port the Express server listens on                          |
 | `NODE_ENV`       | `development`            | Runtime mode                                                |
-| `JWT_SECRET`     | random per process       | Secret used to sign admin JWTs (set this in production)     |
+| `JWT_SECRET`     | random per process       | Signs admin JWTs; server-side only, 32+ chars in production |
 | `JWT_EXPIRES_IN` | `8h`                     | Admin session lifetime                                      |
 | `DB_PATH`        | `data/credvault.sqlite`  | SQLite database file location                               |
-| `ADMIN_EMAIL`    | `admin@credvault.gov`    | Initial administrator e-mail                                |
-| `ADMIN_PASSWORD` | `CredVault@2025`         | Initial administrator password (hashed with bcryptjs)       |
+| `ADMIN_EMAIL`    | `admin@credvault.gov`    | Administrator e-mail address                                |
+| `ADMIN_PASSWORD` | `CredVault@2025`         | Administrator password (bcrypt-hashed at startup)            |
+| `ADMIN_PASSWORD_HASH` | unset               | Pre-hashed bcrypt password; wins over `ADMIN_PASSWORD`      |
 | `ADMIN_NAME`     | `CredVault Administrator`| Display name of the administrator                           |
 | `BCRYPT_ROUNDS`  | `10`                     | bcrypt cost factor                                          |
 
@@ -183,7 +184,7 @@ admin area.
 
 ## Administrator account
 
-On first start the server creates the `admins` table and seeds **one** administrator from
+On first start the server creates the `admins` table and an administrator account from
 `ADMIN_EMAIL` / `ADMIN_PASSWORD`. The password is hashed with bcryptjs before it is stored — the
 plain text is never written to the database or returned by any API.
 
@@ -194,9 +195,95 @@ email:    admin@credvault.gov
 password: CredVault@2025
 ```
 
-Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `.env` to use your own credentials. The account is only
-seeded when the `admins` table is empty, so changing the variables later does not overwrite an
-existing administrator.
+Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` (or `ADMIN_PASSWORD_HASH`) to use your own credentials.
+Startup reconciles the account rather than only seeding a new one: a missing administrator is
+created, and an existing one has its bcrypt hash rewritten whenever the configured credential no
+longer matches. Changing the variables and restarting the server is therefore enough to rotate the
+password. See [Configuring production secrets](#configuring-production-secrets).
+
+---
+
+## Configuring production secrets
+
+Two secrets matter in production: `JWT_SECRET` (signs administrator sessions) and the administrator
+credential (`ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH`). Both are read only by the Express server at
+startup.
+
+- They are **server-side only**. The React client never receives them, and because they are not
+  prefixed with `VITE_`, Vite cannot inline them into the browser bundle. Only `VITE_API_BASE_URL`
+  is exposed to the client.
+- **Nothing logs them.** Startup messages name the variables and, for `JWT_SECRET`, its length —
+  never a value, a hash or a token.
+
+### 1. Generate the values locally
+
+```bash
+# 48 random bytes as hex (96 characters) — a strong JWT signing secret
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+
+# a bcrypt hash of your chosen admin password (hidden input, prints only the hash)
+npm run hash:admin
+```
+
+`npm run hash:admin` prints nothing but the `$2a$…` hash, so the plain-text password never has to
+live in your host's environment settings. Keep the password itself in a password manager.
+
+### 2. Add them in AppJet
+
+Settings → **Environment variables**, then add each entry with these exact names:
+
+| Name                  | Value                                                        |
+| --------------------- | ------------------------------------------------------------ |
+| `JWT_SECRET`          | the 96-character hex string you generated                     |
+| `ADMIN_EMAIL`         | the administrator's e-mail address                            |
+| `ADMIN_PASSWORD`      | your chosen password — **or** omit it and use the hash below   |
+| `ADMIN_PASSWORD_HASH` | the `$2a$…` hash from `npm run hash:admin`                    |
+
+`ADMIN_PASSWORD_HASH` takes precedence when both are present, so you can switch to the hashed form
+without removing `ADMIN_PASSWORD` first. Never prefix either secret with `VITE_` — that would ship
+it to the browser.
+
+### 3. Redeploy
+
+**Yes, a redeploy is required.** Environment variables are injected when the container starts and
+`server/config.ts` reads them during boot, so a running instance keeps the old values until it is
+replaced. Deploy the `appjet` branch again; no code change is needed.
+
+### 4. What happens to the existing account
+
+At startup the configured administrator is looked up by e-mail. If the account already exists, its
+stored `password_hash` is compared against the configured credential with bcryptjs and rewritten
+only when it does not match, so ordinary restarts do not churn the row. After the redeploy the
+existing account signs in with the newly configured password and the previous one stops working.
+Only the bcrypt hash is ever stored.
+
+Tokens signed with the previous `JWT_SECRET` stop verifying as soon as the new secret is in use;
+administrators simply sign in again.
+
+### 5. Verify without revealing the credentials
+
+```bash
+# against the deployed app
+BASE_URL=https://your-app.example.com \
+ADMIN_EMAIL=you@example.com ADMIN_PASSWORD='your-password' npm run verify:admin
+
+# against a local server on http://127.0.0.1:4000
+npm run verify:admin
+```
+
+The script prints only pass/fail lines and HTTP status codes — never the password, the hash or the
+token. It checks that the API is reachable, that an incorrect password is rejected with 401, that
+the configured password is accepted with 200 and a JWT, and that a protected admin route rejects an
+anonymous request but accepts the issued token. It exits non-zero if any check fails.
+
+### Rotating later
+
+Change the value in Settings and redeploy again. Rotating `JWT_SECRET` signs every administrator
+out; rotating the password only changes how the account signs in.
+
+`npm test` includes a regression test (`scripts/test-password-rotation.js`) that boots the server
+three times against one temporary database to prove the stored password is a bcrypt hash, that a
+changed `ADMIN_PASSWORD` updates the existing row, and that `ADMIN_PASSWORD_HASH` takes precedence.
 
 ---
 
