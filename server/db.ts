@@ -126,17 +126,70 @@ export function run(sql: string, params: SqlValue[] = []): void {
   persist();
 }
 
-function seedAdmin(): void {
-  const existing = get<{ count: number }>('SELECT COUNT(*) AS count FROM admins');
-  if (existing && Number(existing.count) > 0) return;
+/** Hashes a plain-text password with bcryptjs using the configured cost factor. */
+export function hashPassword(plainPassword: string): string {
+  return bcrypt.hashSync(plainPassword, config.bcryptRounds);
+}
 
-  const passwordHash = bcrypt.hashSync(config.admin.password, config.bcryptRounds);
-  requireDb().run(
-    'INSERT INTO admins (email, password_hash, name, created_at) VALUES (?, ?, ?, ?)',
-    [config.admin.email, passwordHash, config.admin.name, new Date().toISOString()],
+interface AdminRow {
+  id: number;
+  email: string;
+  password_hash: string;
+}
+
+/**
+ * Keeps the configured administrator account in sync with the environment.
+ *
+ * The password is only ever stored as a bcryptjs hash. An existing account is
+ * rewritten only when the configured credential no longer matches the stored
+ * hash, so ordinary restarts do not churn the row.
+ */
+function syncAdmin(): void {
+  const { email, name, password, passwordHash } = config.admin;
+
+  const existing = get<AdminRow>(
+    'SELECT id, email, password_hash FROM admins WHERE email = ?',
+    [email],
   );
+
+  if (!existing) {
+    const hash = passwordHash ?? (password ? hashPassword(password) : undefined);
+    if (!hash) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[credvault] No administrator account exists for ${email} and no password is configured. ` +
+          'Set ADMIN_PASSWORD or ADMIN_PASSWORD_HASH.',
+      );
+      return;
+    }
+    run('INSERT INTO admins (email, password_hash, name, created_at) VALUES (?, ?, ?, ?)', [
+      email,
+      hash,
+      name,
+      new Date().toISOString(),
+    ]);
+    // eslint-disable-next-line no-console
+    console.log(`[credvault] Created administrator account ${email} (password hashed with bcryptjs).`);
+    return;
+  }
+
+  if (passwordHash) {
+    if (existing.password_hash !== passwordHash) {
+      run('UPDATE admins SET password_hash = ? WHERE id = ?', [passwordHash, existing.id]);
+      // eslint-disable-next-line no-console
+      console.log(`[credvault] Administrator ${email} password updated from ADMIN_PASSWORD_HASH.`);
+    }
+    return;
+  }
+
+  // No configured credential (documented demo fallback): never overwrite an
+  // existing password that the account already has.
+  if (!password) return;
+  if (bcrypt.compareSync(password, existing.password_hash)) return;
+
+  run('UPDATE admins SET password_hash = ? WHERE id = ?', [hashPassword(password), existing.id]);
   // eslint-disable-next-line no-console
-  console.log(`[credvault] Seeded administrator account: ${config.admin.email}`);
+  console.log(`[credvault] Administrator ${email} password updated from ADMIN_PASSWORD.`);
 }
 
 export async function initDatabase(): Promise<void> {
@@ -152,7 +205,7 @@ export async function initDatabase(): Promise<void> {
   }
 
   requireDb().exec(SCHEMA);
-  seedAdmin();
+  syncAdmin();
   persist();
   // eslint-disable-next-line no-console
   console.log(`[credvault] SQLite database ready at ${config.dbPath}`);
