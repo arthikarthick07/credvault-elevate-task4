@@ -1,7 +1,3 @@
-export function cx(...parts: Array<string | false | null | undefined>): string {
-  return parts.filter(Boolean).join(' ');
-}
-
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return '—';
   const date = new Date(iso);
