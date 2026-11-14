@@ -86,6 +86,26 @@ Create a `screenshots` folder in the repository and upload the seven project scr
 | 5 | Application management and review | `05-application-management.png` |
 | 6 | Certificate verification — valid | `06-valid-certificate.png` |
 | 7 | Certificate verification — revoked | `07-revoked-certificate.png` |
+### 1. Home Page
+![Home Page](screenshots/01-home.png)
+
+### 2. Certificate Request Confirmation
+![Request Success](screenshots/02-request-success.png)
+
+### 3. Application Tracking
+![Application Tracking](screenshots/03-track-application.png)
+
+### 4. Administrator Dashboard
+![Admin Dashboard](screenshots/04-admin-dashboard.png)
+
+### 5. Application Management
+![Application Management](screenshots/05-application-management.png)
+
+### 6. Valid Certificate Verification
+![Valid Certificate](screenshots/06-valid-certificate.png)
+
+### 7. Revoked Certificate Verification
+![Revoked Certificate](screenshots/07-revoked-certificate.png)
 
 ## Installation
 
