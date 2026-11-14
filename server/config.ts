@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import dotenv from 'dotenv';
+import { validateEmail } from './validation';
 
 dotenv.config();
 
@@ -49,6 +50,21 @@ if (configuredJwtSecret) {
 }
 
 const configuredAdminEmail = readEnv('ADMIN_EMAIL');
+
+// The login route only accepts a syntactically valid address, so an ADMIN_EMAIL
+// that fails that check would seed an administrator nobody can ever sign in as.
+// Reject it here, at startup, instead of failing silently at the login form.
+const validAdminEmail = configuredAdminEmail ? validateEmail(configuredAdminEmail) : null;
+if (configuredAdminEmail && !validAdminEmail) {
+  // Only the shape is described: the configured value itself stays out of the logs.
+  // eslint-disable-next-line no-console
+  console.warn(
+    '[credvault] ADMIN_EMAIL is not a valid email address (expected a form like ' +
+      `name@example.gov), so it is ignored and ${DEV_ADMIN_EMAIL} is used instead. ` +
+      'Update ADMIN_EMAIL to a valid address to sign in with your own account.',
+  );
+}
+
 const configuredAdminPassword = readEnv('ADMIN_PASSWORD');
 const configuredAdminPasswordHash = readEnv('ADMIN_PASSWORD_HASH');
 
@@ -88,7 +104,7 @@ export const config = {
     : path.join(ROOT, 'data', 'credvault.sqlite'),
   clientDist: path.join(ROOT, 'client', 'dist'),
   admin: {
-    email: (configuredAdminEmail ?? DEV_ADMIN_EMAIL).trim().toLowerCase(),
+    email: validAdminEmail ?? DEV_ADMIN_EMAIL,
     /** Plain-text password from the environment; undefined when a pre-hashed one is supplied. */
     password: adminPasswordHash ? undefined : (configuredAdminPassword ?? DEV_ADMIN_PASSWORD),
     /** Pre-hashed bcrypt password (ADMIN_PASSWORD_HASH); takes precedence over `password`. */
